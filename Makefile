@@ -2,7 +2,7 @@ APP_NAME = Voiceink
 BUNDLE_ID = com.voiceink.app
 BUILD_DIR = .build/release
 APP_BUNDLE = $(BUILD_DIR)/$(APP_NAME).app
-SIGNING_IDENTITY = Voiceink Dev
+SIGNING_IDENTITY = VoiceInk Dev
 
 .PHONY: build run install release qa clean reset-permissions setup-cert
 
@@ -16,6 +16,7 @@ build:
 
 run: build
 	@pkill -x $(APP_NAME) 2>/dev/null || true
+	@pkill -x VoiceInk 2>/dev/null || true
 	@sleep 0.5
 	open "$(APP_BUNDLE)"
 
@@ -32,7 +33,7 @@ release:
 	@echo "Release build done (unsigned)."
 	cd "$(BUILD_DIR)" && zip -r "$(APP_NAME).zip" "$(APP_NAME).app"
 	@echo "Package ready: $(BUILD_DIR)/$(APP_NAME).zip"
-	@echo "⚠️  Users need to run: xattr -cr Voiceink.app"
+	@echo "⚠️  Users need to run: xattr -cr VoiceInk.app"
 
 reset-permissions:
 	@echo "Resetting TCC Accessibility for $(BUNDLE_ID)..."
@@ -51,14 +52,14 @@ clean:
 	rm -rf .build
 
 setup-cert:
-	@if security find-identity -v -p codesigning 2>/dev/null | grep -q "Voiceink Dev"; then \
-		echo "Certificate 'Voiceink Dev' already exists."; \
+	@if security find-identity -v -p codesigning 2>/dev/null | grep -q "VoiceInk Dev"; then \
+		echo "Certificate 'VoiceInk Dev' already exists."; \
 	else \
-		echo "Creating self-signed code signing certificate 'Voiceink Dev'..."; \
+		echo "Creating self-signed code signing certificate 'VoiceInk Dev'..."; \
 		openssl req -x509 -newkey rsa:2048 \
 			-keyout /tmp/voiceink-dev.key -out /tmp/voiceink-dev.crt \
-			-days 3650 -nodes -subj "/CN=Voiceink Dev" \
-			-config <(printf '[req]\ndistinguished_name=dn\nx509_extensions=cs\nprompt=no\n[dn]\nCN=Voiceink Dev\n[cs]\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=critical,codeSigning\n'); \
+			-days 3650 -nodes -subj "/CN=VoiceInk Dev" \
+			-config <(printf '[req]\ndistinguished_name=dn\nx509_extensions=cs\nprompt=no\n[dn]\nCN=VoiceInk Dev\n[cs]\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=critical,codeSigning\n'); \
 		openssl rsa -in /tmp/voiceink-dev.key -out /tmp/voiceink-dev-legacy.key -traditional; \
 		security import /tmp/voiceink-dev.crt -k ~/Library/Keychains/login.keychain-db -T /usr/bin/codesign; \
 		security import /tmp/voiceink-dev-legacy.key -k ~/Library/Keychains/login.keychain-db -T /usr/bin/codesign; \

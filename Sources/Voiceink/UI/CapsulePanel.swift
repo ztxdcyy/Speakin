@@ -10,18 +10,24 @@ enum CapsuleState {
 class CapsulePanel: NSPanel {
     private let effectView: NSVisualEffectView
     private let waveformView: WaveformView
-    private let transcriptLabel: TranscriptLabel
+    private let errorLabel: TranscriptLabel
     private let spinner: NSProgressIndicator
 
-    private let capsuleHeight: CGFloat = 56
-    private let cornerRadius: CGFloat = 28
-    private let waveformSize = NSSize(width: 44, height: 32)
-    private let leadingPadding: CGFloat = 16
-    private let innerSpacing: CGFloat = 12
-    private let trailingPadding: CGFloat = 16
-    private let minTextWidth: CGFloat = 160
+    // Capsule shape: horizontal pill / rounded rectangle
+    private let capsuleWidth: CGFloat = 72
+    private let capsuleHeight: CGFloat = 32
+    private var capsuleCornerRadius: CGFloat { capsuleHeight / 2 }
+    private let waveformSize = NSSize(width: 36, height: 20)
+    private let spinnerSize: CGFloat = 16
+
+    /// Wider size used when showing error text
+    private let errorPadding: CGFloat = 10
+    private let errorTextWidth: CGFloat = 160
 
     private(set) var state: CapsuleState = .hidden
+
+    /// Cached caret position — captured early (before panel steals focus)
+    private var cachedCaretRect: NSRect?
 
     // MARK: - Init
 
@@ -32,43 +38,41 @@ class CapsulePanel: NSPanel {
         effectView.blendingMode = .behindWindow
         effectView.state = .active
         effectView.wantsLayer = true
-        effectView.layer?.cornerRadius = cornerRadius
+        effectView.layer?.cornerRadius = 16  // capsuleHeight / 2
         effectView.layer?.masksToBounds = true
 
-        // Waveform
+        // Waveform — centered in the capsule
         waveformView = WaveformView(frame: NSRect(
-            x: leadingPadding,
+            x: (capsuleWidth - waveformSize.width) / 2,
             y: (capsuleHeight - waveformSize.height) / 2,
             width: waveformSize.width,
             height: waveformSize.height
         ))
 
-        // Transcript label
-        let labelX = leadingPadding + waveformSize.width + innerSpacing
-        transcriptLabel = TranscriptLabel(frame: NSRect(
+        // Error label (only used for error state, hidden normally)
+        let labelX = capsuleWidth + errorPadding
+        errorLabel = TranscriptLabel(frame: NSRect(
             x: labelX,
             y: 0,
-            width: minTextWidth,
+            width: errorTextWidth,
             height: capsuleHeight
         ))
+        errorLabel.isHidden = true
 
-        // Spinner (hidden by default)
+        // Spinner — centered in the capsule
         spinner = NSProgressIndicator()
         spinner.style = .spinning
         spinner.controlSize = .small
         spinner.frame = NSRect(
-            x: leadingPadding + (waveformSize.width - 20) / 2,
-            y: (capsuleHeight - 20) / 2,
-            width: 20,
-            height: 20
+            x: (capsuleWidth - spinnerSize) / 2,
+            y: (capsuleHeight - spinnerSize) / 2,
+            width: spinnerSize,
+            height: spinnerSize
         )
         spinner.isHidden = true
 
-        // Calculate initial width
-        let initialWidth = leadingPadding + waveformSize.width + innerSpacing + minTextWidth + trailingPadding
-
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: initialWidth, height: capsuleHeight),
+            contentRect: NSRect(x: 0, y: 0, width: capsuleWidth, height: capsuleHeight),
             styleMask: [.nonactivatingPanel, .fullSizeContentView, .borderless],
             backing: .buffered,
             defer: false
@@ -76,13 +80,10 @@ class CapsulePanel: NSPanel {
 
         configurePanel()
         setupSubviews()
-
-        transcriptLabel.onWidthChanged = { [weak self] newWidth in
-            self?.updatePanelWidth(textWidth: newWidth)
-        }
     }
 
     private func configurePanel() {
+        appearance = NSAppearance(named: .darkAqua)
         level = .statusBar
         isFloatingPanel = true
         hidesOnDeactivate = false
@@ -103,13 +104,14 @@ class CapsulePanel: NSPanel {
         contentView.addSubview(effectView)
 
         effectView.addSubview(waveformView)
-        effectView.addSubview(transcriptLabel)
         effectView.addSubview(spinner)
+        effectView.addSubview(errorLabel)
     }
 
     // MARK: - State Management
 
     func setState(_ newState: CapsuleState) {
+        AppLogger.shared.log("[Capsule] setState: \(newState), panelW=\(frame.width)")
         state = newState
 
         switch newState {
@@ -117,19 +119,23 @@ class CapsulePanel: NSPanel {
             hideAnimated()
 
         case .recording:
-            transcriptLabel.reset()
+            errorLabel.reset()
+            errorLabel.isHidden = true
             waveformView.reset()
             waveformView.isHidden = false
             waveformView.startAnimating()
             spinner.isHidden = true
             spinner.stopAnimation(nil)
+            resizeToCompact()
             ensureVisible()
 
         case .waitingForResult:
             waveformView.stopAnimating()
             waveformView.isHidden = true
+            errorLabel.isHidden = true
             spinner.isHidden = false
             spinner.startAnimation(nil)
+            resizeToCompact()
             ensureVisible()
 
         case .error(let message):
@@ -137,7 +143,9 @@ class CapsulePanel: NSPanel {
             waveformView.isHidden = true
             spinner.isHidden = true
             spinner.stopAnimation(nil)
-            transcriptLabel.text = message
+            errorLabel.text = message
+            errorLabel.isHidden = false
+            resizeForError()
             ensureVisible()
 
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
@@ -173,39 +181,50 @@ class CapsulePanel: NSPanel {
     }
 
     func updateTranscript(_ text: String) {
-        transcriptLabel.text = text
+        // In compact mode, transcript is not displayed in the capsule.
+        // Kept as no-op for protocol compatibility.
     }
 
-    // MARK: - Panel Width
+    /// Cache a pre-captured caret position for use when the capsule becomes visible.
+    /// The rect should be captured early (e.g. in CGEvent callback) while the frontmost app has focus.
+    func cacheCaretPosition(_ rect: NSRect?) {
+        cachedCaretRect = rect
+        if let r = rect {
+            AppLogger.shared.log("[Capsule] cached caret: \(r)")
+        } else {
+            AppLogger.shared.log("[Capsule] cached caret: nil (will use fallback)")
+        }
+    }
 
-    private func updatePanelWidth(textWidth: CGFloat) {
-        let totalWidth = leadingPadding + waveformSize.width + innerSpacing + textWidth + trailingPadding
+    // MARK: - Panel Sizing
 
-        NSAnimationContext.runAnimationGroup({ context in
-            context.duration = 0.25
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+    /// Compact mode: pill-shaped capsule with just the icon
+    private func resizeToCompact() {
+        var newFrame = frame
+        newFrame.size.width = capsuleWidth
+        newFrame.size.height = capsuleHeight
+        setFrame(newFrame, display: true)
+        effectView.layer?.cornerRadius = capsuleCornerRadius
+    }
 
-            var newFrame = self.frame
-            let widthDelta = totalWidth - newFrame.width
-            newFrame.size.width = totalWidth
-            newFrame.origin.x -= widthDelta / 2 // keep centered
-            self.animator().setFrame(newFrame, display: true)
-
-            // Update transcript label width
-            let labelX = leadingPadding + waveformSize.width + innerSpacing
-            transcriptLabel.animator().frame = NSRect(
-                x: labelX,
-                y: 0,
-                width: textWidth,
-                height: capsuleHeight
-            )
-        })
+    /// Error mode: expand to show error text
+    private func resizeForError() {
+        let totalWidth = capsuleWidth + errorTextWidth + errorPadding
+        var newFrame = frame
+        newFrame.size.width = totalWidth
+        newFrame.size.height = capsuleHeight
+        setFrame(newFrame, display: true)
+        effectView.layer?.cornerRadius = capsuleCornerRadius
     }
 
     // MARK: - Position
 
     private func positionNearCursor() {
-        if let caretRect = Self.getCaretRect() {
+        // Use cached caret (captured early), fall back to live query, then screen center
+        let caretRect = cachedCaretRect ?? Self.getCaretRect()
+        cachedCaretRect = nil  // consume cache
+
+        if let caretRect = caretRect {
             guard let screen = NSScreen.main else {
                 positionAtScreenBottom()
                 return
@@ -213,19 +232,27 @@ class CapsulePanel: NSPanel {
             let screenFrame = screen.frame
             AppLogger.shared.log("[Capsule] caretRect=\(caretRect), screenFrame=\(screenFrame)")
 
-            // Place capsule below the caret, offset 8px down
-            var x = caretRect.origin.x
-            var y = caretRect.origin.y - frame.height - 8
+            let gap: CGFloat = 6  // spacing between caret and capsule
 
-            // Keep within screen bounds
+            // Default: place capsule to the upper-right of the caret
+            var x = caretRect.maxX + gap
+            var y = caretRect.maxY + gap
+
+            // If capsule overflows right edge, flip to upper-left
             if x + frame.width > screenFrame.maxX - 10 {
-                x = screenFrame.maxX - frame.width - 10
+                x = caretRect.origin.x - frame.width - gap
             }
+            // If still overflows left, clamp to left edge
             if x < screenFrame.origin.x + 10 {
                 x = screenFrame.origin.x + 10
             }
+            // If capsule overflows top edge, place below caret instead
+            if y + frame.height > screenFrame.maxY - 10 {
+                y = caretRect.origin.y - frame.height - gap
+            }
+            // If overflows bottom, clamp
             if y < screenFrame.origin.y + 10 {
-                y = caretRect.maxY + 8
+                y = screenFrame.origin.y + 10
             }
 
             setFrameOrigin(NSPoint(x: x, y: y))
@@ -239,10 +266,10 @@ class CapsulePanel: NSPanel {
     private func positionAtScreenBottom() {
         guard let screen = NSScreen.main else { return }
         let screenFrame = screen.visibleFrame
-        let panelWidth = max(frame.width, 248)
+        let panelWidth = max(frame.width, capsuleWidth)
         let x = screenFrame.origin.x + (screenFrame.width - panelWidth) / 2
         let y = screenFrame.origin.y + 80
-        AppLogger.shared.log("[Capsule] fallback position: x=\(x), y=\(y), panelW=\(panelWidth), screenFrame=\(screenFrame)")
+        AppLogger.shared.log("[Capsule] fallback position: x=\(x), y=\(y), panelW=\(panelWidth)")
         setFrameOrigin(NSPoint(x: x, y: y))
     }
 
@@ -293,6 +320,7 @@ class CapsulePanel: NSPanel {
     private func hideAnimated() {
         guard let layer = contentView?.layer else {
             orderOut(nil)
+            resetPanelSize()
             return
         }
 
@@ -308,6 +336,17 @@ class CapsulePanel: NSPanel {
             self?.alphaValue = 1
             self?.waveformView.stopAnimating()
             self?.waveformView.reset()
+            self?.resetPanelSize()
         })
+    }
+
+    /// Reset panel to compact capsule size
+    private func resetPanelSize() {
+        errorLabel.reset()
+        errorLabel.isHidden = true
+        var newFrame = frame
+        newFrame.size.width = capsuleWidth
+        newFrame.size.height = capsuleHeight
+        setFrame(newFrame, display: false)
     }
 }

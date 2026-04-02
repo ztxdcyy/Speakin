@@ -10,9 +10,15 @@ class AudioEngine {
     weak var delegate: AudioEngineDelegate?
 
     private var engine: AVAudioEngine?
-    private var converter: AVAudioConverter?
     private let processingQueue = DispatchQueue(label: "com.voiceink.audio", qos: .userInteractive)
     private(set) var isRecording = false
+
+    /// Frame counter for debugging audio data issues
+    private var frameCount: UInt64 = 0
+    /// Total input samples processed (for debug)
+    private var totalSamplesIn: UInt64 = 0
+    /// Total output samples produced (for debug)
+    private var totalSamplesOut: UInt64 = 0
 
     // MARK: - Start / Stop
 
@@ -21,6 +27,9 @@ class AudioEngine {
 
         let engine = AVAudioEngine()
         self.engine = engine
+        frameCount = 0
+        totalSamplesIn = 0
+        totalSamplesOut = 0
 
         let inputNode = engine.inputNode
         let hardwareFormat = inputNode.inputFormat(forBus: 0)
@@ -30,25 +39,13 @@ class AudioEngine {
             throw AudioEngineError.noInputDevice
         }
 
-        // Target format: 16kHz mono int16
-        let targetFormat = AVAudioFormat(
-            commonFormat: .pcmFormatInt16,
-            sampleRate: AudioConstants.sampleRate,
-            channels: 1,
-            interleaved: true
-        )!
+        let hwRate = hardwareFormat.sampleRate
+        let targetRate = AudioConstants.sampleRate
+        AppLogger.shared.log("[Audio] downsample: \(hwRate) → \(targetRate), ratio=\(hwRate / targetRate)")
 
-        // Create converter from hardware format to target
-        guard let converter = AVAudioConverter(from: hardwareFormat, to: targetFormat) else {
-            AppLogger.shared.log("[Audio] converter creation failed from \(hardwareFormat) to \(targetFormat)")
-            throw AudioEngineError.converterCreationFailed
-        }
-        self.converter = converter
-
-        // Tap inputNode using its own native format — this is the most reliable approach
         let bufferSize: AVAudioFrameCount = 4096
         inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: hardwareFormat) { [weak self] buffer, _ in
-            self?.processAudioBuffer(buffer)
+            self?.processAudioBuffer(buffer, hardwareRate: hwRate, targetRate: targetRate)
         }
 
         engine.prepare()
@@ -64,13 +61,15 @@ class AudioEngine {
         engine?.inputNode.removeTap(onBus: 0)
         engine?.stop()
         engine = nil
-        converter = nil
-        AppLogger.shared.log("[Audio] recording stopped")
+        AppLogger.shared.log("[Audio] recording stopped, frames=\(frameCount), samplesIn=\(totalSamplesIn), samplesOut=\(totalSamplesOut)")
     }
 
-    // MARK: - Audio Processing
+    // MARK: - Audio Processing (Manual Downsample — no AVAudioConverter)
 
-    private func processAudioBuffer(_ buffer: AVAudioPCMBuffer) {
+    /// Pure manual downsampling + Int16 conversion.
+    /// AVAudioConverter has internal resample buffers that cause audio duplication artifacts;
+    /// manual decimation with linear interpolation is simple and perfectly reliable for our 48→16kHz case.
+    private func processAudioBuffer(_ buffer: AVAudioPCMBuffer, hardwareRate: Double, targetRate: Double) {
         guard let floatData = buffer.floatChannelData else { return }
         let frameLength = Int(buffer.frameLength)
         guard frameLength > 0 else { return }
@@ -89,49 +88,41 @@ class AudioEngine {
             self.delegate?.audioEngine(self, didUpdateRMSLevel: rms)
         }
 
-        // 2. Convert to 16kHz int16 PCM and Base64 encode
+        // 2. Manual downsample: linear interpolation from hardwareRate to 16kHz, then quantize to Int16.
+        //    This is stateless per-buffer — zero risk of data duplication.
         processingQueue.async { [weak self] in
-            guard let self = self, let converter = self.converter else { return }
+            guard let self = self, self.isRecording else { return }
 
-            // Calculate expected output frame count after sample rate conversion
-            let ratio = AudioConstants.sampleRate / buffer.format.sampleRate
-            let outputFrameCount = AVAudioFrameCount(Double(frameLength) * ratio)
-            guard outputFrameCount > 0 else { return }
+            let step = hardwareRate / targetRate  // e.g. 48000/16000 = 3.0
+            let outputCount = Int(floor(Double(frameLength) / step))
+            guard outputCount > 0 else { return }
 
-            let targetFormat = AVAudioFormat(
-                commonFormat: .pcmFormatInt16,
-                sampleRate: AudioConstants.sampleRate,
-                channels: 1,
-                interleaved: true
-            )!
+            // Allocate Int16 output directly
+            var int16Samples = [Int16](repeating: 0, count: outputCount)
 
-            guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: outputFrameCount + 128) else {
-                return
+            for i in 0..<outputCount {
+                let srcPos = Double(i) * step
+                let idx = Int(srcPos)
+                let frac = Float(srcPos - Double(idx))
+
+                // Linear interpolation between adjacent samples
+                let s0 = channelData[idx]
+                let s1 = (idx + 1 < frameLength) ? channelData[idx + 1] : s0
+                let sample = s0 + frac * (s1 - s0)
+
+                // Clamp and convert to Int16
+                let clamped = max(-1.0, min(1.0, sample))
+                int16Samples[i] = Int16(clamped * 32767.0)
             }
 
-            var error: NSError?
-            var consumed = false
-            converter.convert(to: outputBuffer, error: &error) { _, outStatus in
-                if consumed {
-                    outStatus.pointee = .noDataNow
-                    return nil
-                }
-                consumed = true
-                outStatus.pointee = .haveData
-                return buffer
+            let data = int16Samples.withUnsafeBufferPointer { ptr in
+                Data(bytes: ptr.baseAddress!, count: outputCount * 2)
             }
-
-            if let error = error {
-                AppLogger.shared.log("[Audio] conversion error: \(error)")
-                return
-            }
-
-            guard let int16Data = outputBuffer.int16ChannelData else { return }
-            let count = Int(outputBuffer.frameLength)
-            guard count > 0 else { return }
-
-            let data = Data(bytes: int16Data[0], count: count * 2)
             let base64 = data.base64EncodedString()
+
+            self.frameCount += 1
+            self.totalSamplesIn += UInt64(frameLength)
+            self.totalSamplesOut += UInt64(outputCount)
             self.delegate?.audioEngine(self, didCaptureAudioFrame: base64)
         }
     }

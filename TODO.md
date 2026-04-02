@@ -24,7 +24,7 @@ Project-level backlog for Voiceink. Items are roughly prioritized top-to-bottom 
 
 - [ ] **Multiple API provider support** — Abstract the WebSocket client to support OpenAI Realtime API or other compatible endpoints in addition to DashScope.
 - [ ] **Transcript history** — Keep a session log of recent transcriptions accessible from the menu bar.
-- [ ] **Custom vocabulary / prompt** — Let users supply a custom transcription hint (e.g., domain-specific terms) via Settings.
+- [ ] **Custom vocabulary / prompt (常用词录入)** — Let users supply a custom word list (e.g., "nixlbench", domain-specific terms) via Settings. Inject these into the system prompt so the model recognizes uncommon words accurately.
 - [ ] **Waveform polish** — Smoother bar animation, idle breathing effect when connected but not recording.
 - [ ] **Notarization & distribution** — Apple notarization + GitHub Releases binary distribution.
 

@@ -9,20 +9,15 @@ final class SessionCoordinator: NSObject {
     }
 
     private let audioEngine = AudioEngine()
-    private let apiClient = RealtimeAPIClient()
+    private let asrClient = GummyASRClient()
     private let capsulePanel = CapsulePanel()
 
     private var state: SessionState = .idle
     private var isFnHolding = false
-    private var pendingStartAfterSessionReady = false
+    private var pendingStartAfterConnect = false
 
     private var recordingStartAt: Date?
     private var responseTimeoutTimer: Timer?
-
-    private var currentTranscript = ""
-    private var finalTranscript = ""
-    /// Accumulates live input_audio_transcription deltas during recording
-    private var liveTranscript = ""
 
     private let minimumHoldDuration: TimeInterval = 0.3
     private let responseTimeout: TimeInterval = 15
@@ -30,26 +25,16 @@ final class SessionCoordinator: NSObject {
     override init() {
         super.init()
         audioEngine.delegate = self
-        apiClient.delegate = self
-
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(onSettingsChanged),
-            name: .voiceInkSettingsSaved, object: nil
-        )
-        log.log("[Session] init")
+        asrClient.delegate = self
+        log.log("[Session] init — Gummy ASR mode")
     }
 
     deinit {
         responseTimeoutTimer?.invalidate()
-        NotificationCenter.default.removeObserver(self)
+        asrClient.disconnect()
     }
 
-    @objc private func onSettingsChanged() {
-        if state == .idle, apiClient.connected {
-            log.log("[Session] settings changed — disconnecting WS to apply new config on next use")
-            apiClient.disconnect()
-        }
-    }
+    // MARK: - Recording lifecycle
 
     private func beginRecordingIfPossible() {
         guard isFnHolding else {
@@ -60,9 +45,6 @@ final class SessionCoordinator: NSObject {
         do {
             try audioEngine.startRecording()
             recordingStartAt = Date()
-            currentTranscript = ""
-            finalTranscript = ""
-            liveTranscript = ""
             state = .recording
             capsulePanel.setState(.recording)
             MenuBarManager.shared.setRecording(true)
@@ -72,6 +54,7 @@ final class SessionCoordinator: NSObject {
             state = .idle
             capsulePanel.setState(.error("无法开始录音: \(error.localizedDescription)"))
             MenuBarManager.shared.setRecording(false)
+            asrClient.disconnect()
         }
     }
 
@@ -87,7 +70,7 @@ final class SessionCoordinator: NSObject {
 
         if heldDuration < minimumHoldDuration {
             log.log("[Session] too short — cancelled")
-            apiClient.cancelResponse()
+            asrClient.disconnect()
             state = .idle
             capsulePanel.setState(.hidden)
             return
@@ -96,11 +79,10 @@ final class SessionCoordinator: NSObject {
         state = .waitingForResult
         capsulePanel.setState(.waitingForResult)
 
-        // Manual mode: commit audio buffer — server will fire inputAudioTranscriptionCompleted
-        // which acts as both the final transcript and the "response done" signal.
-        apiClient.commitAudioBuffer()
+        // Tell Gummy that audio is done — it will flush remaining results
+        asrClient.finishTask()
         startResponseTimeoutTimer()
-        log.log("[Session] audio committed, waiting for transcription result")
+        log.log("[Session] finish-task sent, waiting for final results")
     }
 
     private func resetToIdle() {
@@ -112,7 +94,7 @@ final class SessionCoordinator: NSObject {
 
         state = .idle
         isFnHolding = false
-        pendingStartAfterSessionReady = false
+        pendingStartAfterConnect = false
     }
 
     private func startResponseTimeoutTimer() {
@@ -121,6 +103,7 @@ final class SessionCoordinator: NSObject {
             guard let self = self else { return }
             if self.state == .waitingForResult {
                 log.log("[Session] response timeout (15s)")
+                self.asrClient.disconnect()
                 self.capsulePanel.setState(.error("请求超时"))
                 self.resetToIdle()
             }
@@ -148,13 +131,14 @@ extension SessionCoordinator: FnKeyMonitorDelegate {
 
         isFnHolding = true
 
-        // connect() internally bumps connectionID and tears down any old connection,
-        // so stale async callbacks from the previous WS will be automatically discarded.
-        log.log("[Session] connecting fresh WS")
+        // Cache caret position (captured in CGEvent callback while frontmost app has focus)
+        capsulePanel.cacheCaretPosition(FnKeyMonitor.shared.lastCaretRect)
+
+        log.log("[Session] Fn pressed — connecting Gummy ASR")
         capsulePanel.setState(.waitingForResult)
         state = .connecting
-        pendingStartAfterSessionReady = true
-        apiClient.connect()
+        pendingStartAfterConnect = true
+        asrClient.connect()
     }
 
     func fnKeyDidRelease() {
@@ -164,7 +148,8 @@ extension SessionCoordinator: FnKeyMonitorDelegate {
         switch state {
         case .connecting:
             log.log("[Session] released during connecting — cancel")
-            pendingStartAfterSessionReady = false
+            pendingStartAfterConnect = false
+            asrClient.disconnect()
             state = .idle
             capsulePanel.setState(.hidden)
 
@@ -186,62 +171,50 @@ extension SessionCoordinator: AudioEngineDelegate {
     }
 
     func audioEngine(_ engine: AudioEngine, didCaptureAudioFrame base64PCM: String) {
-        guard state == .recording else { return }
-        apiClient.sendAudioFrame(base64PCM)
+        guard state == .recording, engine.isRecording else { return }
+        asrClient.sendAudioFrame(base64PCM)
     }
 }
 
-// MARK: - RealtimeAPIClientDelegate
+// MARK: - GummyASRClientDelegate
 
-extension SessionCoordinator: RealtimeAPIClientDelegate {
-    func realtimeClientDidConnect(_ client: RealtimeAPIClient) {
-        log.log("[Session] WS connected")
-    }
-
-    func realtimeClientDidDisconnect(_ client: RealtimeAPIClient, reason: String) {
-        log.log("[Session] WS disconnected, state=\(state.rawValue), reason=\(reason)")
-        if state != .idle {
-            capsulePanel.setState(.error(reason))
-        }
-        resetToIdle()
-    }
-
-    func realtimeClientSessionReady(_ client: RealtimeAPIClient) {
-        log.log("[Session] session ready, pending=\(pendingStartAfterSessionReady)")
-        guard pendingStartAfterSessionReady else { return }
-        pendingStartAfterSessionReady = false
+extension SessionCoordinator: GummyASRClientDelegate {
+    func gummyClientDidConnect(_ client: GummyASRClient) {
+        log.log("[Session] Gummy task started, pending=\(pendingStartAfterConnect)")
+        guard pendingStartAfterConnect else { return }
+        pendingStartAfterConnect = false
         beginRecordingIfPossible()
     }
 
-    func realtimeClient(_ client: RealtimeAPIClient, didReceiveLiveTranscriptDelta delta: String) {
-        // Show live transcription during recording AND while waiting for final result
-        guard state == .recording || state == .waitingForResult else { return }
-        liveTranscript += delta
-        capsulePanel.updateTranscript(liveTranscript)
-    }
-
-    func realtimeClient(_ client: RealtimeAPIClient, didCompleteTranscript text: String) {
-        log.log("[Session] transcript done: \(text.prefix(80))")
-        finalTranscript = text
-        if !text.isEmpty {
-            capsulePanel.updateTranscript(text)
+    func gummyClientDidDisconnect(_ client: GummyASRClient, reason: String) {
+        log.log("[Session] Gummy disconnected, state=\(state.rawValue), reason=\(reason)")
+        if state != .idle {
+            capsulePanel.setState(.error(reason))
+            resetToIdle()
         }
     }
 
-    func realtimeClientDidFinishResponse(_ client: RealtimeAPIClient) {
-        log.log("[Session] response done, state=\(state.rawValue)")
+    func gummyClient(_ client: GummyASRClient, didReceivePartialResult text: String) {
+        // Partial results could be shown in capsule (future: live transcription)
+        // For now, just log
+    }
+
+    func gummyClient(_ client: GummyASRClient, didReceiveFinalSentence text: String) {
+        log.log("[Session] final sentence: \(text.prefix(80))")
+    }
+
+    func gummyClientDidFinish(_ client: GummyASRClient) {
+        log.log("[Session] Gummy finished, state=\(state.rawValue)")
 
         guard state == .waitingForResult else { return }
 
         responseTimeoutTimer?.invalidate()
         responseTimeoutTimer = nil
 
-        // Prefer finalTranscript (from completed event), fall back to accumulated live deltas
-        let completedText = finalTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-        let liveText = liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-        let result = !completedText.isEmpty ? completedText : liveText
-
+        let result = client.fullTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
         log.log("[Session] final text (\(result.count) chars): \(result.prefix(100))")
+
+        asrClient.disconnect()
 
         if result.isEmpty {
             log.log("[Session] empty transcript — skip inject")
@@ -256,8 +229,9 @@ extension SessionCoordinator: RealtimeAPIClientDelegate {
         resetToIdle()
     }
 
-    func realtimeClient(_ client: RealtimeAPIClient, didEncounterError error: Error) {
-        log.log("[Session] API error: \(error.localizedDescription)")
+    func gummyClient(_ client: GummyASRClient, didEncounterError error: Error) {
+        log.log("[Session] Gummy error: \(error.localizedDescription)")
+        asrClient.disconnect()
         capsulePanel.setState(.error(error.localizedDescription))
         resetToIdle()
     }

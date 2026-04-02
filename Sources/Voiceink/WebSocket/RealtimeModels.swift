@@ -79,6 +79,10 @@ struct AudioCommitEvent: Encodable {
     let type = "input_audio_buffer.commit"
 }
 
+struct AudioBufferClearEvent: Encodable {
+    let type = "input_audio_buffer.clear"
+}
+
 struct ResponseCreateEvent: Encodable {
     let type = "response.create"
 }
@@ -91,35 +95,10 @@ struct ResponseCancelEvent: Encodable {
 
 struct ServerEvent: Decodable {
     let type: String
-    let delta: String?
     let text: String?
+    let delta: String?
     let transcript: String?
     let error: ServerError?
-    /// Used by input_audio_transcription.delta — nested under `transcription`
-    let transcriptionDelta: String?
-
-    private enum CodingKeys: String, CodingKey {
-        case type, delta, text, transcript, error, transcription
-    }
-
-    private enum TranscriptionKeys: String, CodingKey {
-        case text
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        type = try container.decode(String.self, forKey: .type)
-        delta = try container.decodeIfPresent(String.self, forKey: .delta)
-        text = try container.decodeIfPresent(String.self, forKey: .text)
-        transcript = try container.decodeIfPresent(String.self, forKey: .transcript)
-        error = try container.decodeIfPresent(ServerError.self, forKey: .error)
-        // input_audio_transcription.delta wraps the text inside a `transcription` object
-        if let transcriptionContainer = try? container.nestedContainer(keyedBy: TranscriptionKeys.self, forKey: .transcription) {
-            transcriptionDelta = try transcriptionContainer.decodeIfPresent(String.self, forKey: .text)
-        } else {
-            transcriptionDelta = nil
-        }
-    }
 }
 
 struct ServerError: Decodable {
@@ -134,7 +113,6 @@ enum ServerEventType: String {
     case sessionCreated = "session.created"
     case sessionUpdated = "session.updated"
     case inputAudioBufferCommitted = "input_audio_buffer.committed"
-    case inputAudioTranscriptionDelta = "conversation.item.input_audio_transcription.delta"
     case inputAudioTranscriptionCompleted = "conversation.item.input_audio_transcription.completed"
     case responseCreated = "response.created"
     case responseTextDelta = "response.text.delta"
