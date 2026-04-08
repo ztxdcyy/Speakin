@@ -53,17 +53,29 @@ release:
 	cp "Sources/Speakin/Resources/bird_icon_32.png" "$(APP_BUNDLE)/Contents/Resources/"
 	cp "Sources/Speakin/Resources/bird_icon_32@2x.png" "$(APP_BUNDLE)/Contents/Resources/"
 	@echo "Release build done (unsigned)."
-	@# Create DMG with Applications shortcut
+	@# --- Create styled DMG ---
 	@rm -rf "$(BUILD_DIR)/dmg-staging"
+	@rm -f "$(BUILD_DIR)/$(APP_NAME)-rw.dmg" "$(BUILD_DIR)/$(APP_NAME).dmg"
 	@mkdir -p "$(BUILD_DIR)/dmg-staging"
 	@cp -R "$(APP_BUNDLE)" "$(BUILD_DIR)/dmg-staging/"
 	@ln -s /Applications "$(BUILD_DIR)/dmg-staging/Applications"
-	@rm -f "$(BUILD_DIR)/$(APP_NAME).dmg"
+	@# Create a read-write DMG first
 	hdiutil create -volname "$(APP_NAME)" \
 		-srcfolder "$(BUILD_DIR)/dmg-staging" \
-		-ov -format UDZO \
-		"$(BUILD_DIR)/$(APP_NAME).dmg"
+		-ov -format UDRW \
+		"$(BUILD_DIR)/$(APP_NAME)-rw.dmg"
 	@rm -rf "$(BUILD_DIR)/dmg-staging"
+	@# Mount, style with AppleScript, unmount
+	hdiutil attach "$(BUILD_DIR)/$(APP_NAME)-rw.dmg" -readwrite -noverify -noautoopen
+	@sleep 1
+	osascript scripts/style-dmg.applescript "$(APP_NAME)"
+	@sync
+	@sleep 1
+	hdiutil detach "/Volumes/$(APP_NAME)" -quiet
+	@# Convert to compressed read-only DMG
+	hdiutil convert "$(BUILD_DIR)/$(APP_NAME)-rw.dmg" \
+		-format UDZO -o "$(BUILD_DIR)/$(APP_NAME).dmg"
+	@rm -f "$(BUILD_DIR)/$(APP_NAME)-rw.dmg"
 	@echo "Package ready: $(BUILD_DIR)/$(APP_NAME).dmg"
 	@echo "⚠️  Users need to run: xattr -cr /Applications/Speakin.app"
 
