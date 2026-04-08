@@ -8,6 +8,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 0. Setup standard Edit menu for Cmd+C/V/X/A in text fields
         setupEditMenu()
 
+        // 0.5. Register signal handler so CGEvent tap is ALWAYS cleaned up,
+        //      even when process is killed by SIGTERM (e.g. `pkill`, `make run`).
+        //      Without this, the tap can outlive the process and hijack keyboard.
+        setupSignalHandler()
+
         // 1. Load settings
         _ = SettingsStore.shared
 
@@ -37,6 +42,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         AppLogger.shared.log("[AppDelegate] accessibilityPermissionGranted — (re)starting FnKeyMonitor")
         FnKeyMonitor.shared.stop()
         FnKeyMonitor.shared.start()
+    }
+
+    /// Register a SIGTERM handler that disables and removes the CGEvent tap
+    /// before the process exits. This prevents "keyboard hijack" when the
+    /// process is killed externally (e.g. `pkill`, `make run`, Activity Monitor).
+    private func setupSignalHandler() {
+        let sigTermSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        sigTermSource.setEventHandler {
+            AppLogger.shared.log("[AppDelegate] SIGTERM received — cleaning up tap")
+            FnKeyMonitor.shared.stop()
+            // Give a tiny moment for tap removal to take effect, then exit
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                exit(0)
+            }
+        }
+        sigTermSource.resume()
+        // Must ignore default SIGTERM handling so DispatchSource gets it
+        signal(SIGTERM, SIG_IGN)
     }
 
     /// LSUIElement apps have no main menu, so Cmd+V/C/X/A don't work in text fields.

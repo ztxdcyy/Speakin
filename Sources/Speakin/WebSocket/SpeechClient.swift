@@ -1,21 +1,33 @@
 import Foundation
 
-// MARK: - Delegate Protocol
+// MARK: - Error Type
 
-protocol GummyASRClientDelegate: AnyObject {
-    func gummyClientDidConnect(_ client: GummyASRClient)
-    func gummyClientDidDisconnect(_ client: GummyASRClient, reason: String)
-    func gummyClient(_ client: GummyASRClient, didReceivePartialResult text: String)
-    func gummyClient(_ client: GummyASRClient, didReceiveFinalSentence text: String)
-    func gummyClientDidFinish(_ client: GummyASRClient)
-    func gummyClient(_ client: GummyASRClient, didEncounterError error: Error)
+enum SpeakinError: LocalizedError {
+    case apiError(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .apiError(let message): return message
+        }
+    }
 }
 
-// MARK: - Gummy ASR Client
+// MARK: - Delegate Protocol
 
-/// Dedicated client for Gummy Realtime ASR (speech recognition).
-/// Uses the standalone Gummy WebSocket API at `/api-ws/v1/inference`,
-/// which is completely separate from the Qwen-Omni Realtime API.
+protocol SpeechClientDelegate: AnyObject {
+    func speechClientDidConnect(_ client: SpeechClient)
+    func speechClientDidDisconnect(_ client: SpeechClient, reason: String)
+    func speechClient(_ client: SpeechClient, didReceivePartialResult text: String)
+    func speechClient(_ client: SpeechClient, didReceiveFinalSentence text: String)
+    func speechClientDidFinish(_ client: SpeechClient)
+    func speechClient(_ client: SpeechClient, didEncounterError error: Error)
+}
+
+// MARK: - Speech Client
+
+/// DashScope streaming ASR client using the `/api-ws/v1/inference` WebSocket API.
+/// Model-agnostic: the actual ASR model (e.g. paraformer-realtime-v2, gummy-realtime-v1)
+/// is configured at run-task time, not baked into the class name.
 ///
 /// Protocol:
 ///   1. Connect to wss://dashscope.aliyuncs.com/api-ws/v1/inference
@@ -25,8 +37,8 @@ protocol GummyASRClientDelegate: AnyObject {
 ///   5. Receive `result-generated` events (partial + final sentences)
 ///   6. Send `finish-task` JSON message
 ///   7. Receive remaining results + `task-finished`
-class GummyASRClient {
-    weak var delegate: GummyASRClientDelegate?
+class SpeechClient {
+    weak var delegate: SpeechClientDelegate?
 
     private var webSocketTask: URLSessionWebSocketTask?
     private var urlSession: URLSession?
@@ -50,7 +62,7 @@ class GummyASRClient {
 
         let settings = SettingsStore.shared
         guard let apiKey = settings.apiKey, !apiKey.isEmpty else {
-            AppLogger.shared.log("[Gummy] no API key — skip connect")
+            AppLogger.shared.log("[ASR] no API key — skip connect")
             return
         }
 
@@ -59,7 +71,7 @@ class GummyASRClient {
 
         connectionID &+= 1
         let myID = connectionID
-        AppLogger.shared.log("[Gummy] connecting (#\(myID))")
+        AppLogger.shared.log("[ASR] connecting (#\(myID))")
 
         var request = URLRequest(url: url)
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -88,7 +100,7 @@ class GummyASRClient {
         isConnected = false
         taskStarted = false
         oldTask?.cancel(with: .goingAway, reason: nil)
-        AppLogger.shared.log("[Gummy] disconnected")
+        AppLogger.shared.log("[ASR] disconnected")
     }
 
     // MARK: - Send Audio
@@ -99,7 +111,7 @@ class GummyASRClient {
         guard isConnected, taskStarted else { return }
         webSocketTask?.send(.data(data)) { error in
             if let error = error {
-                AppLogger.shared.log("[Gummy] send audio error: \(error.localizedDescription)")
+                AppLogger.shared.log("[ASR] send audio error: \(error.localizedDescription)")
             }
         }
     }
@@ -124,7 +136,7 @@ class GummyASRClient {
             ]
         ]
         sendJSON(message)
-        AppLogger.shared.log("[Gummy] finish-task sent")
+        AppLogger.shared.log("[ASR] finish-task sent")
     }
 
     // MARK: - Private: Send run-task
@@ -133,11 +145,10 @@ class GummyASRClient {
         let settings = SettingsStore.shared
         let langCode = settings.language
 
-        // Map our language codes to Gummy's source_language codes
+        // Map our language codes to DashScope source_language codes
         let sourceLanguage: String
         switch langCode {
         case "zh-CN": sourceLanguage = "zh"
-        case "zh-TW": sourceLanguage = "zh"
         case "en":    sourceLanguage = "en"
         case "ja":    sourceLanguage = "ja"
         case "ko":    sourceLanguage = "ko"
@@ -159,14 +170,15 @@ class GummyASRClient {
                     "sample_rate": 16000,
                     "format": "pcm",
                     "language_hints": [sourceLanguage],
-                    "disfluency_removal_enabled": true
+                    "disfluency_removal_enabled": true,
+                    "semantic_punctuation_enabled": true
                 ] as [String: Any],
                 "input": [String: Any]()
             ]
         ]
 
         sendJSON(message)
-        AppLogger.shared.log("[Gummy] run-task sent (lang=\(sourceLanguage))")
+        AppLogger.shared.log("[ASR] run-task sent (model=paraformer-realtime-v2, lang=\(sourceLanguage), semantic_punct=true)")
     }
 
     private func sendJSON(_ dict: [String: Any]) {
@@ -176,7 +188,7 @@ class GummyASRClient {
         }
         webSocketTask?.send(.string(jsonString)) { error in
             if let error = error {
-                AppLogger.shared.log("[Gummy] send error: \(error.localizedDescription)")
+                AppLogger.shared.log("[ASR] send error: \(error.localizedDescription)")
             }
         }
     }
@@ -192,12 +204,12 @@ class GummyASRClient {
                 self.handleMessage(message, connectionID: connID)
                 self.listenForMessages(connectionID: connID)
             case .failure(let error):
-                AppLogger.shared.log("[Gummy] receive error: \(error.localizedDescription)")
+                AppLogger.shared.log("[ASR] receive error: \(error.localizedDescription)")
                 self.isConnected = false
                 self.taskStarted = false
                 DispatchQueue.main.async {
                     guard self.connectionID == connID else { return }
-                    self.delegate?.gummyClientDidDisconnect(self, reason: error.localizedDescription)
+                    self.delegate?.speechClientDidDisconnect(self, reason: error.localizedDescription)
                 }
             }
         }
@@ -207,7 +219,7 @@ class GummyASRClient {
         guard case .string(let text) = message else { return }
         guard let data = text.data(using: .utf8) else { return }
 
-        AppLogger.shared.log("[Gummy] recv (#\(connID)): \(text.prefix(400))")
+        AppLogger.shared.log("[ASR] recv (#\(connID)): \(text.prefix(400))")
 
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let header = json["header"] as? [String: Any],
@@ -225,23 +237,23 @@ class GummyASRClient {
         switch event {
         case "task-started":
             taskStarted = true
-            AppLogger.shared.log("[Gummy] task started")
-            delegate?.gummyClientDidConnect(self)
+            AppLogger.shared.log("[ASR] task started")
+            delegate?.speechClientDidConnect(self)
 
         case "result-generated":
             handleResultGenerated(json)
 
         case "task-finished":
-            AppLogger.shared.log("[Gummy] task finished, total sentences: \(finalSentences.count)")
-            delegate?.gummyClientDidFinish(self)
+            AppLogger.shared.log("[ASR] task finished, total sentences: \(finalSentences.count)")
+            delegate?.speechClientDidFinish(self)
 
         case "task-failed":
             let payload = json["payload"] as? [String: Any]
             let output = payload?["output"] as? [String: Any]
             let message = output?["message"] as? String ?? "Unknown error"
             let code = output?["code"] as? String ?? ""
-            AppLogger.shared.log("[Gummy] task failed: \(code) — \(message)")
-            delegate?.gummyClient(self, didEncounterError: SpeakinError.apiError("\(code): \(message)"))
+            AppLogger.shared.log("[ASR] task failed: \(code) — \(message)")
+            delegate?.speechClient(self, didEncounterError: SpeakinError.apiError("\(code): \(message)"))
 
         default:
             break
@@ -254,14 +266,13 @@ class GummyASRClient {
             return
         }
 
-        // Paraformer uses "sentence", Gummy uses "transcription"
+        // Paraformer uses "sentence", other models may use "transcription"
         guard let result = output["sentence"] as? [String: Any]
                 ?? output["transcription"] as? [String: Any] else {
             return
         }
 
         let text = result["text"] as? String ?? ""
-        // Paraformer uses "is_sentence_end", Gummy uses "sentence_end"
         let isSentenceEnd = result["is_sentence_end"] as? Bool
             ?? result["sentence_end"] as? Bool
             ?? false
@@ -270,10 +281,10 @@ class GummyASRClient {
             if !text.isEmpty {
                 finalSentences.append(text)
                 AppLogger.shared.log("[ASR] final sentence: \(text)")
-                delegate?.gummyClient(self, didReceiveFinalSentence: text)
+                delegate?.speechClient(self, didReceiveFinalSentence: text)
             }
         } else {
-            delegate?.gummyClient(self, didReceivePartialResult: text)
+            delegate?.speechClient(self, didReceivePartialResult: text)
         }
     }
 

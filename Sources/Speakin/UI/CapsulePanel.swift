@@ -13,12 +13,20 @@ class CapsulePanel: NSPanel {
     private let errorLabel: TranscriptLabel
     private let spinner: NSProgressIndicator
 
+    /// Floating bird icon shown outside the capsule (to its left) during recording.
+    private var birdWindow: NSPanel?
+
     // Capsule shape: horizontal pill / rounded rectangle
     private let capsuleWidth: CGFloat = 72
     private let capsuleHeight: CGFloat = 32
     private var capsuleCornerRadius: CGFloat { capsuleHeight / 2 }
     private let waveformSize = NSSize(width: 36, height: 20)
     private let spinnerSize: CGFloat = 16
+
+    /// Size of the floating bird icon outside the capsule
+    private let birdSize: CGFloat = 60
+    /// Gap between bird and capsule
+    private let birdGap: CGFloat = 6
 
     /// Wider size used when showing error text
     private let errorPadding: CGFloat = 10
@@ -43,19 +51,19 @@ class CapsulePanel: NSPanel {
 
         // Waveform — centered in the capsule
         waveformView = WaveformView(frame: NSRect(
-            x: (capsuleWidth - waveformSize.width) / 2,
-            y: (capsuleHeight - waveformSize.height) / 2,
+            x: (72 - waveformSize.width) / 2,
+            y: (32 - waveformSize.height) / 2,
             width: waveformSize.width,
             height: waveformSize.height
         ))
 
         // Error label (only used for error state, hidden normally)
-        let labelX = capsuleWidth + errorPadding
+        let labelX: CGFloat = 72 + errorPadding
         errorLabel = TranscriptLabel(frame: NSRect(
             x: labelX,
             y: 0,
             width: errorTextWidth,
-            height: capsuleHeight
+            height: 32
         ))
         errorLabel.isHidden = true
 
@@ -64,15 +72,15 @@ class CapsulePanel: NSPanel {
         spinner.style = .spinning
         spinner.controlSize = .small
         spinner.frame = NSRect(
-            x: (capsuleWidth - spinnerSize) / 2,
-            y: (capsuleHeight - spinnerSize) / 2,
+            x: (72 - spinnerSize) / 2,
+            y: (32 - spinnerSize) / 2,
             width: spinnerSize,
             height: spinnerSize
         )
         spinner.isHidden = true
 
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: capsuleWidth, height: capsuleHeight),
+            contentRect: NSRect(x: 0, y: 0, width: 72, height: 32),
             styleMask: [.nonactivatingPanel, .fullSizeContentView, .borderless],
             backing: .buffered,
             defer: false
@@ -128,6 +136,7 @@ class CapsulePanel: NSPanel {
             spinner.stopAnimation(nil)
             resizeToCompact()
             ensureVisible()
+            showBirdWindow()
 
         case .waitingForResult:
             waveformView.stopAnimating()
@@ -135,6 +144,7 @@ class CapsulePanel: NSPanel {
             errorLabel.isHidden = true
             spinner.isHidden = false
             spinner.startAnimation(nil)
+            hideBirdWindow()
             resizeToCompact()
             ensureVisible()
 
@@ -143,6 +153,7 @@ class CapsulePanel: NSPanel {
             waveformView.isHidden = true
             spinner.isHidden = true
             spinner.stopAnimation(nil)
+            hideBirdWindow()
             errorLabel.text = message
             errorLabel.isHidden = false
             resizeForError()
@@ -275,8 +286,10 @@ class CapsulePanel: NSPanel {
 
     /// Use Accessibility API (system-wide) to get the caret position.
     /// Uses AXUIElementCreateSystemWide to avoid frontmostApplication issues.
+    /// Short messaging timeout (150ms) prevents blocking if target app is unresponsive.
     private static func getCaretRect() -> NSRect? {
         let systemElement = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(systemElement, 0.15)
 
         var focusedElement: AnyObject?
         guard AXUIElementCopyAttributeValue(systemElement, kAXFocusedUIElementAttribute as CFString, &focusedElement) == .success else {
@@ -285,6 +298,7 @@ class CapsulePanel: NSPanel {
         }
 
         let element = focusedElement as! AXUIElement
+        AXUIElementSetMessagingTimeout(element, 0.15)
 
         var selectedRange: AnyObject?
         guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &selectedRange) == .success else {
@@ -348,5 +362,68 @@ class CapsulePanel: NSPanel {
         newFrame.size.width = capsuleWidth
         newFrame.size.height = capsuleHeight
         setFrame(newFrame, display: false)
+    }
+
+    // MARK: - Floating Bird Window
+
+    /// Show a colorful bird icon floating to the left of the capsule.
+    private func showBirdWindow() {
+        if birdWindow == nil {
+            let panel = NSPanel(
+                contentRect: NSRect(x: 0, y: 0, width: birdSize, height: birdSize),
+                styleMask: [.nonactivatingPanel, .fullSizeContentView, .borderless],
+                backing: .buffered,
+                defer: false
+            )
+            panel.appearance = NSAppearance(named: .darkAqua)
+            panel.level = .statusBar
+            panel.isFloatingPanel = true
+            panel.hidesOnDeactivate = false
+            panel.titleVisibility = .hidden
+            panel.titlebarAppearsTransparent = true
+            panel.isMovableByWindowBackground = false
+            panel.backgroundColor = .clear
+            panel.isOpaque = false
+            panel.hasShadow = false
+            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+
+            let imageView = NSImageView(frame: NSRect(x: 0, y: 0, width: birdSize, height: birdSize))
+            imageView.image = Bundle.main.image(forResource: "bird_capsule")
+            imageView.imageScaling = .scaleProportionallyUpOrDown
+            panel.contentView = imageView
+
+            birdWindow = panel
+        }
+
+        positionBirdWindow()
+        birdWindow?.alphaValue = 0
+        birdWindow?.orderFrontRegardless()
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.25
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            self.birdWindow?.animator().alphaValue = 1
+        }
+    }
+
+    /// Position the bird window to the left of the capsule.
+    private func positionBirdWindow() {
+        let capsuleFrame = self.frame
+        let x = capsuleFrame.origin.x - birdSize - birdGap
+        let y = capsuleFrame.origin.y + (capsuleFrame.height - birdSize) / 2
+        birdWindow?.setFrameOrigin(NSPoint(x: x, y: y))
+    }
+
+    /// Hide the floating bird window.
+    private func hideBirdWindow() {
+        guard let bird = birdWindow, bird.isVisible else { return }
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.15
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            bird.animator().alphaValue = 0
+        }, completionHandler: {
+            bird.orderOut(nil)
+            bird.alphaValue = 1
+        })
     }
 }

@@ -8,9 +8,9 @@
     <key>CFBundleIdentifier</key>
     <string>com.speakin.app</string>
     <key>CFBundleVersion</key>
-    <string>1.0.0</string>
+    <string>0.3.0</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>0.3.0</string>
     <key>CFBundleExecutable</key>
     <string>Speakin</string>
     <key>CFBundlePackageType</key>
@@ -21,6 +21,8 @@
     <true/>
     <key>NSMicrophoneUsageDescription</key>
     <string>Speakin needs microphone access to record your voice and convert it to text.</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
 </dict>

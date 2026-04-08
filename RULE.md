@@ -4,11 +4,13 @@ Based on everything we've covered, here are the three most important principles:
 
 严格遵循流程：提问 → Plan → Action → Check
 
-在完成任务后，make run，完成编译，等待人工测试。
+在完成任务后，需要 AI 来执行 make run。确认完成编译且没有问题之后等待人工测试。
 
 在开发过程中可以适量添加 flag 以及 debug 语句方便定位问题，也可以记录 log 到 logs 文件夹或者 tmp 文件夹。
 
 善于搜索网络，优先搜索开发者文档！！！
+
+
 
 ## Principle 1: Persist Progress to the Filesystem, Not the Context Window
 

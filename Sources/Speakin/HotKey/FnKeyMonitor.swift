@@ -61,7 +61,10 @@ class FnKeyMonitor {
 
     func stop() {
         if let tap = eventTap {
+            // Disable first so no more events are intercepted
             CGEvent.tapEnable(tap: tap, enable: false)
+            // Invalidate the MachPort so the tap is fully removed from the system
+            CFMachPortInvalidate(tap)
         }
         if let source = runLoopSource {
             CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, .commonModes)
@@ -69,11 +72,17 @@ class FnKeyMonitor {
         eventTap = nil
         runLoopSource = nil
         fnPressed = false
-        print("[Speakin] Fn key monitor stopped.")
+        AppLogger.shared.log("[FnKey] monitor stopped, tap destroyed")
     }
 
     // MARK: - Event Handling
 
+    /// Modifier flags that are NOT the Fn key — used to decide whether to swallow the event.
+    private static let nonFnModifiers: CGEventFlags = [
+        .maskCommand, .maskShift, .maskAlternate, .maskControl, .maskAlphaShift
+    ]
+
+    /// Returns whether the event should be suppressed (true = swallow pure-Fn events only).
     fileprivate func handleFlagsChanged(_ event: CGEvent) -> Bool {
         let flags = event.flags
         let isFn = flags.contains(.maskSecondaryFn)
@@ -81,31 +90,45 @@ class FnKeyMonitor {
         if isFn && !fnPressed {
             fnPressed = true
             AppLogger.shared.log("[FnKey] Fn DOWN detected")
-            // Capture caret position SYNCHRONOUSLY in the event callback,
-            // before the event is swallowed and before any async dispatch.
-            // This is the only reliable moment where the frontmost app still has AX focus.
-            // Falls back to mouse position for apps without AX support (e.g. VS Code / Electron).
-            lastCaretRect = Self.captureCaretRect() ?? Self.mousePositionRect()
+
+            // Capture mouse position immediately (safe, non-blocking).
+            // AX caret query is deferred to main.async to avoid blocking the event pipeline.
+            let mouseRect = Self.mousePositionRect()
+
             DispatchQueue.main.async { [weak self] in
-                self?.delegate?.fnKeyDidPress()
+                guard let self = self else { return }
+                // Try AX caret query with short timeout; fall back to mouse position.
+                self.lastCaretRect = Self.captureCaretRect() ?? mouseRect
+                self.delegate?.fnKeyDidPress()
             }
-            return true
+
+            // Only swallow if this is a PURE Fn press (no other modifiers).
+            // If Cmd/Shift/Option/Control are also held, let the event through
+            // so the system sees those modifier state changes.
+            let hasOtherModifiers = !flags.intersection(Self.nonFnModifiers).isEmpty
+            return !hasOtherModifiers
+
         } else if !isFn && fnPressed {
             fnPressed = false
             AppLogger.shared.log("[FnKey] Fn UP detected")
             DispatchQueue.main.async { [weak self] in
                 self?.delegate?.fnKeyDidRelease()
             }
-            return true
+
+            let hasOtherModifiers = !flags.intersection(Self.nonFnModifiers).isEmpty
+            return !hasOtherModifiers
         }
 
         return false
     }
 
     /// Capture the caret rect using Accessibility API.
-    /// Can be called from any thread.
+    /// Uses a short messaging timeout (150ms) to avoid blocking if the target app is unresponsive.
+    /// Should be called from main thread (moved out of CGEvent callback for safety).
     private static func captureCaretRect() -> NSRect? {
         let systemElement = AXUIElementCreateSystemWide()
+        // Set a short timeout so we never block for the default ~5 seconds
+        AXUIElementSetMessagingTimeout(systemElement, 0.15)
 
         var focusedElement: AnyObject?
         guard AXUIElementCopyAttributeValue(systemElement, kAXFocusedUIElementAttribute as CFString, &focusedElement) == .success else {
@@ -114,6 +137,7 @@ class FnKeyMonitor {
         }
 
         let element = focusedElement as! AXUIElement
+        AXUIElementSetMessagingTimeout(element, 0.15)
 
         var selectedRange: AnyObject?
         guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &selectedRange) == .success else {

@@ -55,7 +55,7 @@ final class PermissionGuideWindowController: NSWindowController {
 
         // Icon
         iconView.frame = NSRect(x: padding, y: 316, width: 32, height: 32)
-        iconView.image = Self.emojiImage("🎤", size: 32)
+        iconView.image = Bundle.main.image(forResource: "bird_icon_32")
         iconView.imageScaling = .scaleProportionallyUpOrDown
         contentView.addSubview(iconView)
 
@@ -178,7 +178,7 @@ final class PermissionGuideWindowController: NSWindowController {
             primaryButton?.isEnabled = true
 
         case .allDone:
-            iconView.image = Self.emojiImage("🎉", size: 32)
+            iconView.image = Bundle.main.image(forResource: "bird_icon_32")
             titleLabel.stringValue = "设置全部完成！"
             descriptionLabel.stringValue = """
 Speakin 已准备就绪。

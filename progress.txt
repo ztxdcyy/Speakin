@@ -150,3 +150,24 @@
 ### Next Steps
 1. User validates the two-step wizard interaction
 2. Continue end-to-end QA for recording/transcription/injection
+
+## Session 9 — 2026-04-08 10:19
+
+### Completed
+- [x] Bird logo integration — all 7 plan items verified complete:
+  - Resources: AppIcon.icns, bird_capsule.png/@2x, bird_logo.png (docs)
+  - BirdDrawing.swift: programmatic template (menu bar) + colorful (capsule/guide) bird
+  - MenuBarManager: SF Symbol → BirdDrawing.templateImage (with recording sound waves)
+  - CapsulePanel: floating bird window (BirdDrawing.colorfulImage) during recording
+  - PermissionGuideWindowController: BirdDrawing.colorfulImage in allDone step
+  - SettingsWindowController: brand icon + "Speakin" label at top
+  - Info.plist: CFBundleIconFile = AppIcon
+  - Package.swift: exclude list updated for .icns and .png
+  - Makefile: build + release targets copy all resources
+  - docs/index.html: topbar logo → bird_logo.png
+- [x] Build passed (make build)
+- [x] App launched successfully (make run)
+
+### Next Steps
+1. Manual verification: check menu bar icon, capsule bird, settings brand icon, permission guide icon
+2. Test recording flow end-to-end with bird visual elements

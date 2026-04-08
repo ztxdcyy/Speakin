@@ -9,7 +9,7 @@ final class SessionCoordinator: NSObject {
     }
 
     private let audioEngine = AudioEngine()
-    private let asrClient = GummyASRClient()
+    private let asrClient = SpeechClient()
     private let capsulePanel = CapsulePanel()
 
     private var state: SessionState = .idle
@@ -26,7 +26,7 @@ final class SessionCoordinator: NSObject {
         super.init()
         audioEngine.delegate = self
         asrClient.delegate = self
-        log.log("[Session] init — Gummy ASR mode")
+        log.log("[Session] init — DashScope ASR (paraformer-realtime-v2)")
     }
 
     deinit {
@@ -79,7 +79,7 @@ final class SessionCoordinator: NSObject {
         state = .waitingForResult
         capsulePanel.setState(.waitingForResult)
 
-        // Tell Gummy that audio is done — it will flush remaining results
+        // Tell ASR server that audio is done — it will flush remaining results
         asrClient.finishTask()
         startResponseTimeoutTimer()
         log.log("[Session] finish-task sent, waiting for final results")
@@ -134,7 +134,7 @@ extension SessionCoordinator: FnKeyMonitorDelegate {
         // Cache caret position (captured in CGEvent callback while frontmost app has focus)
         capsulePanel.cacheCaretPosition(FnKeyMonitor.shared.lastCaretRect)
 
-        log.log("[Session] Fn pressed — connecting Gummy ASR")
+        log.log("[Session] Fn pressed — connecting ASR")
         capsulePanel.setState(.waitingForResult)
         state = .connecting
         pendingStartAfterConnect = true
@@ -176,35 +176,35 @@ extension SessionCoordinator: AudioEngineDelegate {
     }
 }
 
-// MARK: - GummyASRClientDelegate
+// MARK: - SpeechClientDelegate
 
-extension SessionCoordinator: GummyASRClientDelegate {
-    func gummyClientDidConnect(_ client: GummyASRClient) {
-        log.log("[Session] Gummy task started, pending=\(pendingStartAfterConnect)")
+extension SessionCoordinator: SpeechClientDelegate {
+    func speechClientDidConnect(_ client: SpeechClient) {
+        log.log("[Session] ASR task started, pending=\(pendingStartAfterConnect)")
         guard pendingStartAfterConnect else { return }
         pendingStartAfterConnect = false
         beginRecordingIfPossible()
     }
 
-    func gummyClientDidDisconnect(_ client: GummyASRClient, reason: String) {
-        log.log("[Session] Gummy disconnected, state=\(state.rawValue), reason=\(reason)")
+    func speechClientDidDisconnect(_ client: SpeechClient, reason: String) {
+        log.log("[Session] ASR disconnected, state=\(state.rawValue), reason=\(reason)")
         if state != .idle {
             capsulePanel.setState(.error(reason))
             resetToIdle()
         }
     }
 
-    func gummyClient(_ client: GummyASRClient, didReceivePartialResult text: String) {
+    func speechClient(_ client: SpeechClient, didReceivePartialResult text: String) {
         // Partial results could be shown in capsule (future: live transcription)
         // For now, just log
     }
 
-    func gummyClient(_ client: GummyASRClient, didReceiveFinalSentence text: String) {
+    func speechClient(_ client: SpeechClient, didReceiveFinalSentence text: String) {
         log.log("[Session] final sentence: \(text.prefix(80))")
     }
 
-    func gummyClientDidFinish(_ client: GummyASRClient) {
-        log.log("[Session] Gummy finished, state=\(state.rawValue)")
+    func speechClientDidFinish(_ client: SpeechClient) {
+        log.log("[Session] ASR finished, state=\(state.rawValue)")
 
         guard state == .waitingForResult else { return }
 
@@ -229,8 +229,8 @@ extension SessionCoordinator: GummyASRClientDelegate {
         resetToIdle()
     }
 
-    func gummyClient(_ client: GummyASRClient, didEncounterError error: Error) {
-        log.log("[Session] Gummy error: \(error.localizedDescription)")
+    func speechClient(_ client: SpeechClient, didEncounterError error: Error) {
+        log.log("[Session] ASR error: \(error.localizedDescription)")
         asrClient.disconnect()
         capsulePanel.setState(.error(error.localizedDescription))
         resetToIdle()

@@ -2,7 +2,7 @@ APP_NAME = Speakin
 BUNDLE_ID = com.speakin.app
 BUILD_DIR = .build/release
 APP_BUNDLE = $(BUILD_DIR)/$(APP_NAME).app
-SIGNING_IDENTITY = Speakin Dev
+SIGNING_IDENTITY = VoiceInk Dev
 
 .PHONY: build run install release qa clean reset-permissions setup-cert
 
@@ -12,12 +12,26 @@ build:
 	mkdir -p "$(APP_BUNDLE)/Contents/Resources"
 	cp "$(BUILD_DIR)/$(APP_NAME)" "$(APP_BUNDLE)/Contents/MacOS/"
 	cp "Sources/Speakin/Resources/Info.plist" "$(APP_BUNDLE)/Contents/"
+	cp "Sources/Speakin/Resources/AppIcon.icns" "$(APP_BUNDLE)/Contents/Resources/"
+	cp "Sources/Speakin/Resources/bird_capsule.png" "$(APP_BUNDLE)/Contents/Resources/"
+	cp "Sources/Speakin/Resources/bird_capsule@2x.png" "$(APP_BUNDLE)/Contents/Resources/"
+	cp "Sources/Speakin/Resources/bird_menubar.png" "$(APP_BUNDLE)/Contents/Resources/"
+	cp "Sources/Speakin/Resources/bird_menubar@2x.png" "$(APP_BUNDLE)/Contents/Resources/"
+	cp "Sources/Speakin/Resources/bird_menubar.svg" "$(APP_BUNDLE)/Contents/Resources/"
+	cp "Sources/Speakin/Resources/bird_icon_32.png" "$(APP_BUNDLE)/Contents/Resources/"
+	cp "Sources/Speakin/Resources/bird_icon_32@2x.png" "$(APP_BUNDLE)/Contents/Resources/"
 	codesign --force --sign "$(SIGNING_IDENTITY)" "$(APP_BUNDLE)"
 
 run: build
+	@# Graceful shutdown: send SIGTERM then wait for process to fully exit
 	@pkill -x $(APP_NAME) 2>/dev/null || true
-	@pkill -x Speakin 2>/dev/null || true
-	@sleep 0.5
+	@for i in 1 2 3 4 5 6 7 8 9 10; do \
+		pgrep -x $(APP_NAME) >/dev/null 2>&1 || break; \
+		sleep 0.3; \
+	done
+	@# Force kill if still alive after 3 seconds
+	@pkill -9 -x $(APP_NAME) 2>/dev/null || true
+	@sleep 0.3
 	open "$(APP_BUNDLE)"
 
 install: build
@@ -30,10 +44,28 @@ release:
 	mkdir -p "$(APP_BUNDLE)/Contents/Resources"
 	cp "$(BUILD_DIR)/$(APP_NAME)" "$(APP_BUNDLE)/Contents/MacOS/"
 	cp "Sources/Speakin/Resources/Info.plist" "$(APP_BUNDLE)/Contents/"
+	cp "Sources/Speakin/Resources/AppIcon.icns" "$(APP_BUNDLE)/Contents/Resources/"
+	cp "Sources/Speakin/Resources/bird_capsule.png" "$(APP_BUNDLE)/Contents/Resources/"
+	cp "Sources/Speakin/Resources/bird_capsule@2x.png" "$(APP_BUNDLE)/Contents/Resources/"
+	cp "Sources/Speakin/Resources/bird_menubar.png" "$(APP_BUNDLE)/Contents/Resources/"
+	cp "Sources/Speakin/Resources/bird_menubar@2x.png" "$(APP_BUNDLE)/Contents/Resources/"
+	cp "Sources/Speakin/Resources/bird_menubar.svg" "$(APP_BUNDLE)/Contents/Resources/"
+	cp "Sources/Speakin/Resources/bird_icon_32.png" "$(APP_BUNDLE)/Contents/Resources/"
+	cp "Sources/Speakin/Resources/bird_icon_32@2x.png" "$(APP_BUNDLE)/Contents/Resources/"
 	@echo "Release build done (unsigned)."
-	cd "$(BUILD_DIR)" && zip -r "$(APP_NAME).zip" "$(APP_NAME).app"
-	@echo "Package ready: $(BUILD_DIR)/$(APP_NAME).zip"
-	@echo "⚠️  Users need to run: xattr -cr Speakin.app"
+	@# Create DMG with Applications shortcut
+	@rm -rf "$(BUILD_DIR)/dmg-staging"
+	@mkdir -p "$(BUILD_DIR)/dmg-staging"
+	@cp -R "$(APP_BUNDLE)" "$(BUILD_DIR)/dmg-staging/"
+	@ln -s /Applications "$(BUILD_DIR)/dmg-staging/Applications"
+	@rm -f "$(BUILD_DIR)/$(APP_NAME).dmg"
+	hdiutil create -volname "$(APP_NAME)" \
+		-srcfolder "$(BUILD_DIR)/dmg-staging" \
+		-ov -format UDZO \
+		"$(BUILD_DIR)/$(APP_NAME).dmg"
+	@rm -rf "$(BUILD_DIR)/dmg-staging"
+	@echo "Package ready: $(BUILD_DIR)/$(APP_NAME).dmg"
+	@echo "⚠️  Users need to run: xattr -cr /Applications/Speakin.app"
 
 reset-permissions:
 	@echo "Resetting TCC Accessibility for $(BUNDLE_ID)..."
@@ -52,14 +84,14 @@ clean:
 	rm -rf .build
 
 setup-cert:
-	@if security find-identity -v -p codesigning 2>/dev/null | grep -q "Speakin Dev"; then \
-		echo "Certificate 'Speakin Dev' already exists."; \
+	@if security find-identity -v -p codesigning 2>/dev/null | grep -q "$(SIGNING_IDENTITY)"; then \
+		echo "Certificate '$(SIGNING_IDENTITY)' already exists."; \
 	else \
-		echo "Creating self-signed code signing certificate 'Speakin Dev'..."; \
+		echo "Creating self-signed code signing certificate '$(SIGNING_IDENTITY)'..."; \
 		openssl req -x509 -newkey rsa:2048 \
 			-keyout /tmp/speakin-dev.key -out /tmp/speakin-dev.crt \
-			-days 3650 -nodes -subj "/CN=Speakin Dev" \
-			-config <(printf '[req]\ndistinguished_name=dn\nx509_extensions=cs\nprompt=no\n[dn]\nCN=Speakin Dev\n[cs]\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=critical,codeSigning\n'); \
+			-days 3650 -nodes -subj "/CN=$(SIGNING_IDENTITY)" \
+			-config <(printf '[req]\ndistinguished_name=dn\nx509_extensions=cs\nprompt=no\n[dn]\nCN=$(SIGNING_IDENTITY)\n[cs]\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=critical,codeSigning\n'); \
 		openssl rsa -in /tmp/speakin-dev.key -out /tmp/speakin-dev-legacy.key -traditional; \
 		security import /tmp/speakin-dev.crt -k ~/Library/Keychains/login.keychain-db -T /usr/bin/codesign; \
 		security import /tmp/speakin-dev-legacy.key -k ~/Library/Keychains/login.keychain-db -T /usr/bin/codesign; \

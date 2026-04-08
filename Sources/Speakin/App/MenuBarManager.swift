@@ -7,6 +7,46 @@ class MenuBarManager {
 
     static let shared = MenuBarManager()
 
+    // MARK: - Localized menu strings keyed by language code
+
+    private static let menuStrings: [String: [String: String]] = [
+        "zh-CN": [
+            "language": "语言",
+            "languageHint": "同时切换界面和语音识别语言",
+            "settings": "设置...",
+            "launchAtLogin": "开机自启",
+            "quit": "退出 Speakin",
+        ],
+        "en": [
+            "language": "Language",
+            "languageHint": "Switches both UI and speech recognition",
+            "settings": "Settings...",
+            "launchAtLogin": "Launch at Login",
+            "quit": "Quit Speakin",
+        ],
+        "ja": [
+            "language": "言語",
+            "languageHint": "UIと音声認識の両方を切り替えます",
+            "settings": "設定...",
+            "launchAtLogin": "ログイン時に起動",
+            "quit": "Speakin を終了",
+        ],
+        "ko": [
+            "language": "언어",
+            "languageHint": "UI 및 음성 인식 언어를 모두 전환합니다",
+            "settings": "설정...",
+            "launchAtLogin": "로그인 시 실행",
+            "quit": "Speakin 종료",
+        ],
+    ]
+
+    /// Get a localized menu string for the current language, falling back to English.
+    private func localizedString(_ key: String) -> String {
+        let lang = SettingsStore.shared.language
+        return Self.menuStrings[lang]?[key]
+            ?? Self.menuStrings["en"]![key]!
+    }
+
     init() {
         setupStatusItem()
         buildMenu()
@@ -17,19 +57,27 @@ class MenuBarManager {
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: "Speakin")
-            button.image?.size = NSSize(width: 18, height: 18)
+            button.image = Self.loadMenuBarImage()
         }
     }
 
     func setRecording(_ recording: Bool) {
-        DispatchQueue.main.async { [weak self] in
-            let symbolName = recording ? "mic.badge.plus" : "mic.fill"
-            self?.statusItem.button?.image = NSImage(
-                systemSymbolName: symbolName,
-                accessibilityDescription: "Speakin"
-            )
+        // Currently a no-op; the menu bar icon stays the same during recording.
+        // The capsule floating bird provides the recording visual indicator.
+    }
+
+    /// Load the bird SVG template image from bundle resources for the menu bar.
+    /// The SVG is a potrace-vectorized version of the logo, pure black paths on transparent
+    /// background, suitable for use as a template image (auto-adapts to light/dark mode).
+    private static func loadMenuBarImage() -> NSImage? {
+        guard let svgURL = Bundle.main.url(forResource: "bird_menubar", withExtension: "svg"),
+              let image = NSImage(contentsOf: svgURL) else {
+            AppLogger.shared.log("WARNING: Failed to load bird_menubar.svg from bundle")
+            return nil
         }
+        image.size = NSSize(width: 30, height: 30)
+        image.isTemplate = true
+        return image
     }
 
     // MARK: - Menu
@@ -38,13 +86,18 @@ class MenuBarManager {
         menu = NSMenu()
 
         // Language submenu
-        let languageItem = NSMenuItem(title: "Language", action: nil, keyEquivalent: "")
+        let languageItem = NSMenuItem(title: localizedString("language"), action: nil, keyEquivalent: "")
         let languageMenu = NSMenu()
+
+        // Hint label explaining this setting controls both UI and ASR
+        let hintItem = NSMenuItem(title: localizedString("languageHint"), action: nil, keyEquivalent: "")
+        hintItem.isEnabled = false
+        languageMenu.addItem(hintItem)
+        languageMenu.addItem(NSMenuItem.separator())
 
         let languages: [(String, String)] = [
             ("简体中文", "zh-CN"),
             ("English", "en"),
-            ("繁體中文", "zh-TW"),
             ("日本語", "ja"),
             ("한국어", "ko"),
         ]
@@ -65,12 +118,12 @@ class MenuBarManager {
         menu.addItem(NSMenuItem.separator())
 
         // Settings
-        let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ",")
+        let settingsItem = NSMenuItem(title: localizedString("settings"), action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
         menu.addItem(settingsItem)
 
         // Launch at Login
-        let launchItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin(_:)), keyEquivalent: "")
+        let launchItem = NSMenuItem(title: localizedString("launchAtLogin"), action: #selector(toggleLaunchAtLogin(_:)), keyEquivalent: "")
         launchItem.target = self
         launchItem.state = SettingsStore.shared.launchAtLogin ? .on : .off
         menu.addItem(launchItem)
@@ -78,7 +131,7 @@ class MenuBarManager {
         menu.addItem(NSMenuItem.separator())
 
         // Quit
-        let quitItem = NSMenuItem(title: "Quit Speakin", action: #selector(quitApp), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: localizedString("quit"), action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
 
@@ -91,12 +144,8 @@ class MenuBarManager {
         guard let code = sender.representedObject as? String else { return }
         SettingsStore.shared.language = code
 
-        // Update checkmarks
-        if let languageMenu = sender.menu {
-            for item in languageMenu.items {
-                item.state = (item.representedObject as? String) == code ? .on : .off
-            }
-        }
+        // Rebuild entire menu so all labels update to the new language
+        buildMenu()
     }
 
     @objc private func openSettings() {

@@ -39,11 +39,28 @@ class SettingsStore {
     @OptionalUserDefault<String>(key: "speakin_apiKey")
     var apiKey: String?
 
-    @UserDefault(key: "speakin_model", defaultValue: "qwen-omni-turbo-realtime-latest")
-    var model: String
-
-    @UserDefault(key: "speakin_language", defaultValue: "zh-CN")
+    @UserDefault(key: "speakin_language", defaultValue: SettingsStore.detectSystemLanguage())
     var language: String
+
+    /// Infer language from macOS system preferences, falling back to "en".
+    static func detectSystemLanguage() -> String {
+        let supported: [(prefixes: [String], code: String)] = [
+            (["zh-Hans", "zh-CN", "zh-Hant", "zh-TW", "zh-HK"], "zh-CN"),
+            (["en"], "en"),
+            (["ja"], "ja"),
+            (["ko"], "ko"),
+        ]
+        for preferred in Locale.preferredLanguages {
+            for entry in supported {
+                for prefix in entry.prefixes {
+                    if preferred.hasPrefix(prefix) {
+                        return entry.code
+                    }
+                }
+            }
+        }
+        return "en"
+    }
 
     @UserDefault(key: "speakin_launchAtLogin", defaultValue: false)
     var launchAtLogin: Bool
@@ -51,7 +68,6 @@ class SettingsStore {
     var languageDisplayName: String {
         switch language {
         case "zh-CN": return "简体中文"
-        case "zh-TW": return "繁體中文"
         case "en":    return "English"
         case "ja":    return "日本語"
         case "ko":    return "한국어"
@@ -63,7 +79,6 @@ class SettingsStore {
     var languageInstruction: String {
         switch language {
         case "zh-CN": return "简体中文"
-        case "zh-TW": return "繁體中文"
         case "en":    return "English"
         case "ja":    return "日本語"
         case "ko":    return "한국어"
@@ -71,5 +86,12 @@ class SettingsStore {
         }
     }
 
-    private init() {}
+    private init() {
+        // Migrate legacy zh-TW setting to zh-CN
+        if language == "zh-TW" {
+            language = "zh-CN"
+        }
+        // Clean up legacy model key
+        UserDefaults.standard.removeObject(forKey: "speakin_model")
+    }
 }
