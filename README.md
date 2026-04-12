@@ -66,6 +66,10 @@ make clean
 
 ## 更新记录
 
+### v0.4.1 — 修复键盘劫持（macOS 26 beta）
+
+macOS 26 beta 强化了 `NSEvent.mouseLocation` 的主线程要求，导致 CGEvent 回调阻塞、tap 反复被系统 disable，产生键盘劫持症状。已修复：所有 AppKit API 调用移出 CGEvent 回调。
+
 ### v0.4.0 — 自定义触发热键
 
 **背景**：Speakin 最初绑定的触发键是苹果地球键（Fn），这个按键信号只存在于苹果原生键盘（MacBook 内置键盘、苹果薄膜键盘）。所有第三方外接键盘——无论机械键盘、罗技、雷蛇等——都不发送这个信号。这意味着笔记本合盖接外接键盘的场景下，Speakin 几乎无法使用。

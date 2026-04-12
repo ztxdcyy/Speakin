@@ -2,6 +2,17 @@
 
 All notable changes to Speakin will be documented in this file.
 
+## [v0.4.1] - 2026-04-12
+
+### Fixed
+
+- **修复键盘劫持问题（macOS 26 beta）**
+  - 在 macOS 26 beta 中，`NSEvent.mouseLocation` 强化了主线程要求，在 CGEvent 回调（后台线程）中直接调用会导致阻塞
+  - 阻塞超过 250ms 后 macOS 强制 disable CGEvent tap，期间键盘事件无法正常流转，产生键盘劫持体验
+  - 修复：将所有 `mousePositionRect()` 调用移入 `DispatchQueue.main.async`，CGEvent 回调本身不再调用任何 AppKit API，执行时间 < 1ms
+
+---
+
 ## [v0.4.0] - 2026-04-12
 
 ### Added
