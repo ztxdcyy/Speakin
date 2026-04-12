@@ -26,20 +26,7 @@ macOS 语音输入工具 —— 按住触发键说话，松开后文字自动输
 - macOS 13.0+
 - 辅助功能权限（用于监听触发热键和模拟粘贴）
 - 麦克风权限
-- DashScope API Key
-
-## 构建与运行
-
-```bash
-# 构建
-make build
-
-# 运行
-make run
-
-# 清理
-make clean
-```
+- DashScope API Key（阿里云百炼平台）
 
 ## 配置
 
@@ -47,15 +34,6 @@ make clean
 
 1. 授予辅助功能权限
 2. 配置 DashScope API Key（在菜单栏图标 → Settings 中设置）
-
-## 技术栈
-
-- Swift 5.9 / Swift Package Manager
-- AppKit（纯原生，无 SwiftUI 依赖）
-- WebSocket（URLSessionWebSocketTask）
-- AVAudioEngine + 手动降采样（音频采集，48kHz→16kHz）
-- CGEvent（热键监听与键盘模拟，支持 Fn / 修饰键 / 功能键）
-- Accessibility API（光标位置获取）
 
 ## TODO
 
