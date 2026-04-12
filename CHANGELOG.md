@@ -2,6 +2,30 @@
 
 All notable changes to Speakin will be documented in this file.
 
+## [v0.4.0] - 2026-04-12
+
+### Added
+
+- **用户自定义触发热键 — 支持外接键盘**
+  - 设置窗口新增「触发按键」区域，可录制任意自定义热键
+  - 支持三种热键类型：
+    - Fn 键（默认，仅内置键盘）
+    - 纯修饰键（如右 Option、右 Command）—— 通过 `flagsChanged` 检测，不拦截系统事件
+    - 功能键（如 F13–F19）或修饰键组合 —— 通过 `keyDown`/`keyUp` 检测，精确拦截
+  - 「重置」按钮可随时恢复 Fn 默认
+  - 热键切换实时生效，无需重启应用
+  - 验证逻辑：拒绝 Cmd+字母等系统保留组合，拒绝无修饰的普通按键
+
+### Technical
+
+- 新增 `HotkeyMonitor`（替换 `FnKeyMonitor`）：支持动态 eventMask、录制模式暂停/恢复
+- 新增 `UserHotkeyConfig`：`Codable` 数据模型，持久化到 UserDefaults（JSON 编码）
+- `SettingsWindowController` 窗口高度 220→310pt，新增热键录制状态机
+- 录制期间 disable CGEventTap，通过 `NSEvent.addLocalMonitorForEvents` 捕获按键，不影响其他应用
+- `reEnableIfNeeded()` 在 tap 重启前同步硬件状态，防止修饰键卡死
+
+---
+
 ## [v0.3.0] - 2026-04-08
 
 ### Changed
