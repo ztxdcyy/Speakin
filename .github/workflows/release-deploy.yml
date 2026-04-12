@@ -1,29 +1,50 @@
 name: Release Deploy
+
 on:
   release:
-    types: [created]
-  workflow_dispatch:
-  push:
-    branches: [ main ]
+    types: [published]
 
 jobs:
-  deploy:
+  update-homepage:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      contents: write
 
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Use a token that can push to trigger downstream deployments
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version tag
+        id: version
+        run: echo "tag=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
+
+      - name: Update version badge in homepage
+        run: |
+          VERSION="${{ steps.version.outputs.tag }}"
+          # Update the version badge span
+          sed -i "s|<span class=\"version-tag\" id=\"app-version\">.*</span>|<span class=\"version-tag\" id=\"app-version\">${VERSION}</span>|" docs/index.html
+          # Update the Gitee release download URL (versioned path)
+          sed -i "s|https://gitee.com/ztxdcyy/Speakin/releases/download/[^/]*/Speakin.dmg|https://gitee.com/ztxdcyy/Speakin/releases/download/${VERSION}/Speakin.dmg|g" docs/index.html
+          echo "Updated homepage to ${VERSION}"
+          grep -n "app-version\|gitee.*download" docs/index.html
+
+      - name: Commit updated homepage
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/index.html
+          git diff --cached --quiet && echo "No changes to commit" || \
+            git commit -m "chore: update homepage version to ${{ steps.version.outputs.tag }}"
+          git push
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./docs
-          force_orphan: true
+          publish_branch: gh-pages
+          force_orphan: false
+          commit_message: "chore: deploy ${{ steps.version.outputs.tag }}"
