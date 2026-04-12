@@ -2,6 +2,12 @@ Based on everything we've covered, here are the three most important principles:
 
 ---
 
+发布流程：
+
+1. 推送代码到远端仓库，判断本次改动是否足以发布一个新版本，如果可以，打上一个tag。
+2. 编译产物，推送到GitHub/release，保持简洁。
+3. 根据本次更改内容更新 changelog和readme。
+
 严格遵循流程：提问 → Plan → Action → Check
 
 在完成任务后，需要 AI 来执行 make run。确认完成编译且没有问题之后等待人工测试。
@@ -10,13 +16,12 @@ Based on everything we've covered, here are the three most important principles:
 
 善于搜索网络，优先搜索开发者文档！！！
 
-
-
 ## Principle 1: Persist Progress to the Filesystem, Not the Context Window
 
 **Core action:** Force artifact writes before every session ends.
 
 Maintain three types of files:
+
 - `progress.txt` (free-form text): what was done, where it got stuck, what comes next
 - `features.json` (structured): feature status tracking — Agents may only update the `status` field, never rewrite the whole file
 - `git log`: a natural audit trail of every decision
